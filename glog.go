@@ -1,60 +1,66 @@
 package main
 
 import (
-  "fmt"
-  "os"
-  "os/signal"
-  "io/ioutil"
-  "github.com/stratoberry/go-gpsd"
-  "github.com/ptrv/go-gpx"
+    "encoding/csv"
+    "fmt"
+    "github.com/docopt/docopt-go"
+    "github.com/stratoberry/go-gpsd"
+    "os"
+    "strconv"
 )
 
+func f2s(input_num float64) string {
+    return strconv.FormatFloat(input_num, 'f', -1, 64)
+}
+
 func main() {
-  var gps *gpsd.Session
-  var err error
+    usage := `Glog.
 
+Usage:
+  glog [-h HOST] [-p PORT] [-o FILE]
+  glog --help
+  glog --version
 
-  if gps, err = gpsd.Dial("localhost:2947"); err != nil {
-    panic(fmt.Sprintf("Failed to connect to GPSD: ", err))
-  }
+Options:
+  -h HOST --host=HOST    Host [default: localhost]
+  -p PORT --port=PORT    Port [default: 2947]
+  -o FILE --output=FILE    Output file [default: glog_output.csv]
+  --help    Show this screen.
+  --version    Show version.`
 
-  g := gpx.NewGpx()
-  gpxTrack := gpx.Trk{}
-  gpxSegment := gpx.Trkseg{}
+    args, _ := docopt.Parse(usage, nil, true, "Glog 0.1", false)
 
-  tpvfilter := func(r interface{}) {
-    tpv := r.(*gpsd.TPVReport)
-    gpxSegment.Points = append(gpxSegment.Points, gpx.Wpt{Timestamp: tpv.Time, Lat: tpv.Lat, Lon: tpv.Lon, Ele: tpv.Alt})
-    //fmt.Println("TPV", tpv.Tag, tpv.Mode, tpv.Time, tpv.Lat, tpv.Lon, tpv.Alt, tpv.Epx, tpv.Epy, tpv.Epv)
-  }
+    var gps *gpsd.Session
+    var err error
 
-/*  skyfilter := func(r interface{}) {
-    sky := r.(*gpsd.SKYReport)
-    fmt.Println("SKY", len(sky.Satellites), "satellites")
-  }
-*/
-
-  gps.AddFilter("TPV", tpvfilter)
-//  gps.AddFilter("SKY", skyfilter)
-
-c := make(chan os.Signal, 1)
-signal.Notify(c, os.Interrupt)
-go func(){
-  for sig := range c {
-    gpxTrack.Segments = append(gpxTrack.Segments, gpxSegment)
-    g.Tracks = append(g.Tracks, gpxTrack)
-    err := ioutil.WriteFile("output.gpx", g.ToXML(), 0644)
-    if err != nil {
-      panic(err)
+    host := fmt.Sprintf("%v:%v", args["--host"],  args["--port"])
+    if gps, err = gpsd.Dial(host); err != nil {
+        panic(fmt.Sprintf("Failed to connect to GPSD: ", err))
     }
-    fmt.Println(sig)
-    os.Exit(1)
-  }
-}()
 
-  done := gps.Watch()
-  <-done
+    csvfile, err := os.Create(fmt.Sprintf("%v", args["--output"]))
+    if err != nil {
+        panic(err)
+    }
+    defer csvfile.Close()
+    writer := csv.NewWriter(csvfile)
+    erra := writer.Write([]string{"timestamp", "lat", "lon", "alt", "speed", "track", "climb", "ept", "epy", "epx", "epv", "eps", "epd", "epc", "mode"})
+    if erra != nil {
+        panic(erra)
+    }
+    writer.Flush()
 
-
-
+    tpvfilter := func(r interface{}) {
+        tpv := r.(*gpsd.TPVReport)
+        if tpv.Time != "" && tpv.Mode == 3 {
+            err := writer.Write([]string{tpv.Time, f2s(tpv.Lat), f2s(tpv.Lon), f2s(tpv.Alt), f2s(tpv.Speed), f2s(tpv.Track), f2s(tpv.Climb), f2s(tpv.Ept), f2s(tpv.Epy), f2s(tpv.Epx), f2s(tpv.Epv), f2s(tpv.Eps), f2s(tpv.Epd), f2s(tpv.Epc), fmt.Sprintf("%v", tpv.Mode)})
+            if err != nil {
+                panic(err)
+            }
+            writer.Flush()
+        }
+    }
+    gps.AddFilter("TPV", tpvfilter)
+    done := gps.Watch()
+    <-done
 }
